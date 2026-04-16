@@ -219,11 +219,11 @@ async function connectWS() {
           });
         }
         
-        // Kiểm tra dự đoán đúng/sai
-        if (lastPrediction && lastPrediction.id === entry.sessionId) {
+        // Kiểm tra dự đoán đúng/sai (sửa lỗi so sánh ID === thành ==)
+        if (lastPrediction && lastPrediction.id == entry.sessionId) {
           const correct = lastPrediction.predicted === entry.result;
           const predEntry = {
-            id: entry.sessionId,
+            id: parseInt(entry.sessionId),
             predicted: lastPrediction.predicted,
             confidence: lastPrediction.confidence,
             result: entry.result,
