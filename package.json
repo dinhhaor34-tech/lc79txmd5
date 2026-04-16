@@ -4,8 +4,8 @@
   "description": "Tài Xỉu Prediction API Server",
   "main": "server.js",
   "scripts": {
-    "start": "node server-working.js",
-    "dev": "nodemon server-working.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "keywords": ["taixiu", "prediction", "api"],
   "author": "",
