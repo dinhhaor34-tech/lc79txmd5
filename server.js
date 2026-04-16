@@ -15,6 +15,7 @@ app.use(express.json());
 let history = [];
 let predHistory = [];
 let currentTick = null;
+let lastPrediction = null; // Lưu dự đoán cuối cùng
 
 // Auth
 const USERNAME = process.env.TELE68_USER || "dinhhaor150";
@@ -179,6 +180,61 @@ async function connectWS() {
         history.unshift(entry);
         if (history.length > 100) history = history.slice(0, 100);
         console.log(`[RESULT] #${entry.sessionId}: ${entry.result}`);
+        
+        // Lưu vào sessions.jsonl (format giống npm start)
+        if (currentTick && currentTick.data) {
+          const data = currentTick.data;
+          const total = data.totalAmountPerType.TAI + data.totalAmountPerType.XIU;
+          const taiAmt = data.totalAmountPerType.TAI;
+          const xiuAmt = data.totalAmountPerType.XIU;
+          const taiPct = total > 0 ? (taiAmt / total * 100) : 0;
+          const xiuPct = 100 - taiPct;
+          
+          // Tính velocity (giả sử từ dữ liệu có sẵn hoặc dùng taiPct/xiuPct)
+          const velTai = taiPct; // Có thể cải thiện sau
+          const velXiu = xiuPct;
+          
+          const sessionData = {
+            id: parseInt(entry.sessionId),
+            md5: payload.md5Raw.split(':')[1] || '',
+            result: entry.result,
+            dices: entry.dice,
+            sum: entry.dice.reduce((a, b) => a + b, 0),
+            totalAmt: total,
+            taiAmt: taiAmt,
+            xiuAmt: xiuAmt,
+            taiPct: parseFloat(taiPct.toFixed(2)),
+            xiuPct: parseFloat(xiuPct.toFixed(2)),
+            velTai: parseFloat(velTai.toFixed(2)),
+            velXiu: parseFloat(velXiu.toFixed(2)),
+            tickCount: currentTick.tick || 0,
+            time: new Date().toISOString()
+          };
+          
+          // Lưu vào file
+          const line = JSON.stringify(sessionData) + '\n';
+          fs.appendFile('sessions.jsonl', line, (err) => {
+            if (err) console.error('[FILE] Error saving:', err.message);
+            else console.log(`[FILE] Saved #${entry.sessionId} to sessions.jsonl`);
+          });
+        }
+        
+        // Kiểm tra dự đoán đúng/sai
+        if (lastPrediction && lastPrediction.id === entry.sessionId) {
+          const correct = lastPrediction.predicted === entry.result;
+          const predEntry = {
+            id: entry.sessionId,
+            predicted: lastPrediction.predicted,
+            confidence: lastPrediction.confidence,
+            result: entry.result,
+            dices: entry.dice,
+            correct: correct
+          };
+          predHistory.unshift(predEntry);
+          if (predHistory.length > 50) predHistory = predHistory.slice(0, 50);
+          console.log(`[PRED] #${entry.sessionId}: ${lastPrediction.predicted} → ${entry.result} ${correct ? '✅' : '❌'}`);
+          lastPrediction = null;
+        }
       } else if (event === 'new-session') {
         console.log(`[NEW] #${payload.id}`);
       }
@@ -270,6 +326,16 @@ app.get('/api/dudoan', (req, res) => {
   const streak = getStreak(history);
   const signal = calcSignal(taiPct, xiuPct, d.subTick, d.state, streak);
   
+  // Lưu dự đoán nếu có pick và chưa lưu phiên này
+  if (signal.pick && (!lastPrediction || lastPrediction.id !== d.id)) {
+    lastPrediction = {
+      id: d.id,
+      predicted: signal.pick,
+      confidence: signal.confidence
+    };
+    console.log(`[PRED] #${d.id}: Dự đoán ${signal.pick} (${signal.confidence.toFixed(0)}%)`);
+  }
+  
   res.json({
     sessionId: d.id,
     tick: d.subTick,
@@ -281,6 +347,46 @@ app.get('/api/dudoan', (req, res) => {
     icon: signal.icon,
     text: signal.text,
     streak: streak
+  });
+});
+
+app.post('/api/dulieu', (req, res) => {
+  const { sessionId, result, dice } = req.body;
+  if (!sessionId || !result) {
+    return res.json({ error: 'Thiếu dữ liệu' });
+  }
+  
+  const entry = { sessionId, result, dice };
+  history.unshift(entry);
+  if (history.length > 100) history = history.slice(0, 100);
+  
+  console.log(`[DATA] Saved #${sessionId}: ${result}`);
+  res.json({ success: true });
+});
+
+// API để download sessions.jsonl
+app.get('/api/sessions', (req, res) => {
+  fs.readFile('sessions.jsonl', 'utf8', (err, data) => {
+    if (err) {
+      return res.json({ error: 'Chưa có dữ liệu', sessions: [] });
+    }
+    const lines = data.trim().split('\n').filter(l => l);
+    const sessions = lines.map(l => {
+      try { return JSON.parse(l); }
+      catch { return null; }
+    }).filter(s => s);
+    res.json({ sessions, count: sessions.length });
+  });
+});
+
+// API để xóa sessions.jsonl (reset)
+app.delete('/api/sessions', (req, res) => {
+  fs.unlink('sessions.jsonl', (err) => {
+    if (err && err.code !== 'ENOENT') {
+      return res.json({ error: 'Lỗi xóa file' });
+    }
+    console.log('[FILE] Deleted sessions.jsonl');
+    res.json({ success: true, message: 'Đã xóa dữ liệu' });
   });
 });
 
