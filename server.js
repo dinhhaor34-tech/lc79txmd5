@@ -112,8 +112,56 @@ function isTokenExpiringSoon(token) {
 const WS_URL = "wss://wtxmd52.tele68.com/txmd5/?EIO=4&transport=websocket";
 let ws = null;
 
+// Helper functions
+function getStreak(hist) {
+  if (!hist.length) return { count: 0, type: '--' };
+  const first = hist[0].result;
+  let count = 0;
+  for (const h of hist) { if (h.result === first) count++; else break; }
+  return { count, type: first };
+}
+
+function calcSignal(taiPct, xiuPct, tick, state, streak) {
+  if (state !== 'BETTING' || tick > 30) {
+    return { icon: '⏳', text: 'Chờ dữ liệu', confidence: 0, pick: null };
+  }
+
+  let scoreTai = 50, scoreXiu = 50;
+  const diff = Math.abs(taiPct - xiuPct);
+  
+  // Ưu tiên 1: Cầu xen kẽ (accuracy 62-70%)
+  const recent2 = history.slice(0, 2);
+  if (recent2.length >= 2 && recent2[0].result !== recent2[1].result) {
+    if (recent2[0].result === 'TAI') {
+      scoreXiu += 40;
+    } else {
+      scoreTai += 40;
+    }
+  } else {
+    if (taiPct > xiuPct) {
+      scoreTai += diff * 0.5;
+    } else {
+      scoreXiu += diff * 0.5;
+    }
+  }
+  
+  if (streak.count >= 4) {
+    const bonus = Math.min(streak.count * 2, 10);
+    if (streak.type === 'TAI') scoreXiu += bonus;
+    else scoreTai += bonus;
+  }
+
+  const totalScore = scoreTai + scoreXiu;
+  const taiConf = scoreTai / totalScore * 100;
+  const xiuConf = scoreXiu / totalScore * 100;
+  const pick = taiConf > xiuConf ? 'TAI' : 'XIU';
+  const confidence = Math.max(taiConf, xiuConf);
+  const icon = confidence >= 65 ? '🎯' : confidence >= 55 ? '📈' : '🤔';
+
+  return { icon, text: `${pick} — ${confidence.toFixed(0)}%`, confidence, pick };
+}
+
 async function connectWS() {
-  // Auto login nếu token hết hạn
   if (!currentToken || isTokenExpiringSoon(currentToken)) {
     try {
       await login();
@@ -145,7 +193,6 @@ async function connectWS() {
     }
     if (txt === '2') { ws.send('3'); return; }
     
-    // Token bị từ chối
     if (txt.includes('"unauthorized"')) {
       console.log('[AUTH] Token rejected, re-login...');
       try {
@@ -171,6 +218,29 @@ async function connectWS() {
           state: payload.state,
           data: payload.data
         };
+
+        // Tự động tạo dự đoán khi đủ điều kiện
+        const d = currentTick;
+        if (d.state === 'BETTING' && d.subTick >= 15 && d.data) {
+          const data = d.data;
+          const total = data.totalAmountPerType.TAI + data.totalAmountPerType.XIU;
+          if (total > 0) {
+            const taiPct = data.totalAmountPerType.TAI / total * 100;
+            const xiuPct = 100 - taiPct;
+            const streak = getStreak(history);
+            const signal = calcSignal(taiPct, xiuPct, d.subTick, d.state, streak);
+            
+            if (signal.pick && (!lastPrediction || lastPrediction.id !== d.id)) {
+              lastPrediction = {
+                id: d.id,
+                predicted: signal.pick,
+                confidence: signal.confidence
+              };
+              console.log(`[PRED] #${d.id}: Dự đoán ${signal.pick} (${signal.confidence.toFixed(0)}%)`);
+            }
+          }
+        }
+
       } else if (event === 'session-result') {
         const entry = {
           sessionId: payload.md5Raw.split(':')[0],
@@ -181,7 +251,6 @@ async function connectWS() {
         if (history.length > 100) history = history.slice(0, 100);
         console.log(`[RESULT] #${entry.sessionId}: ${entry.result}`);
         
-        // Lưu vào sessions.jsonl (format giống npm start)
         if (currentTick && currentTick.data) {
           const data = currentTick.data;
           const total = data.totalAmountPerType.TAI + data.totalAmountPerType.XIU;
@@ -189,10 +258,6 @@ async function connectWS() {
           const xiuAmt = data.totalAmountPerType.XIU;
           const taiPct = total > 0 ? (taiAmt / total * 100) : 0;
           const xiuPct = 100 - taiPct;
-          
-          // Tính velocity (giả sử từ dữ liệu có sẵn hoặc dùng taiPct/xiuPct)
-          const velTai = taiPct; // Có thể cải thiện sau
-          const velXiu = xiuPct;
           
           const sessionData = {
             id: parseInt(entry.sessionId),
@@ -205,13 +270,12 @@ async function connectWS() {
             xiuAmt: xiuAmt,
             taiPct: parseFloat(taiPct.toFixed(2)),
             xiuPct: parseFloat(xiuPct.toFixed(2)),
-            velTai: parseFloat(velTai.toFixed(2)),
-            velXiu: parseFloat(velXiu.toFixed(2)),
+            velTai: parseFloat(taiPct.toFixed(2)),
+            velXiu: parseFloat(xiuPct.toFixed(2)),
             tickCount: currentTick.tick || 0,
             time: new Date().toISOString()
           };
           
-          // Lưu vào file
           const line = JSON.stringify(sessionData) + '\n';
           fs.appendFile('sessions.jsonl', line, (err) => {
             if (err) console.error('[FILE] Error saving:', err.message);
@@ -219,7 +283,7 @@ async function connectWS() {
           });
         }
         
-        // Kiểm tra dự đoán đúng/sai (sửa lỗi so sánh ID === thành ==)
+        // Kiểm tra dự đoán
         if (lastPrediction && lastPrediction.id == entry.sessionId) {
           const correct = lastPrediction.predicted === entry.result;
           const predEntry = {
@@ -232,13 +296,11 @@ async function connectWS() {
             time: new Date().toISOString()
           };
           
-          // Ghi vào file predictions.jsonl (không giới hạn)
           fs.appendFile('predictions.jsonl', JSON.stringify(predEntry) + '\n', (err) => {
             if (err) console.error('[FILE] Error saving prediction:', err.message);
             else console.log(`[PRED] Saved prediction #${entry.sessionId} to predictions.jsonl`);
           });
           
-          // Vẫn lưu vào bộ nhớ cho API snapshot (giới hạn 50)
           predHistory.unshift(predEntry);
           if (predHistory.length > 50) predHistory = predHistory.slice(0, 50);
           
@@ -261,58 +323,6 @@ async function connectWS() {
     console.log('[WS] Disconnected, reconnecting in 5s...');
     setTimeout(connectWS, 5000);
   });
-}
-
-// Helper functions
-function getStreak(hist) {
-  if (!hist.length) return { count: 0, type: '--' };
-  const first = hist[0].result;
-  let count = 0;
-  for (const h of hist) { if (h.result === first) count++; else break; }
-  return { count, type: first };
-}
-
-function calcSignal(taiPct, xiuPct, tick, state, streak) {
-  if (state !== 'BETTING' || tick > 30) {
-    return { icon: '⏳', text: 'Chờ dữ liệu', confidence: 0, pick: null };
-  }
-
-  let scoreTai = 50, scoreXiu = 50;
-  const diff = Math.abs(taiPct - xiuPct);
-  
-  // Ưu tiên 1: Cầu xen kẽ (accuracy 62-70%)
-  const recent2 = history.slice(0, 2);
-  if (recent2.length >= 2 && recent2[0].result !== recent2[1].result) {
-    // Pattern xen kẽ detected → dự đoán tiếp tục xen kẽ
-    if (recent2[0].result === 'TAI') {
-      scoreXiu += 40; // Bonus lớn cho xen kẽ
-    } else {
-      scoreTai += 40;
-    }
-  } else {
-    // Không có xen kẽ → dùng FOLLOWING (theo dòng tiền)
-    if (taiPct > xiuPct) {
-      scoreTai += diff * 0.5; // Following: tiền vào đâu → đoán đó
-    } else {
-      scoreXiu += diff * 0.5;
-    }
-  }
-  
-  // Streak bonus (nhỏ hơn)
-  if (streak.count >= 4) {
-    const bonus = Math.min(streak.count * 2, 10);
-    if (streak.type === 'TAI') scoreXiu += bonus;
-    else scoreTai += bonus;
-  }
-
-  const totalScore = scoreTai + scoreXiu;
-  const taiConf = scoreTai / totalScore * 100;
-  const xiuConf = scoreXiu / totalScore * 100;
-  const pick = taiConf > xiuConf ? 'TAI' : 'XIU';
-  const confidence = Math.max(taiConf, xiuConf);
-  const icon = confidence >= 65 ? '🎯' : confidence >= 55 ? '📈' : '🤔';
-
-  return { icon, text: `${pick} — ${confidence.toFixed(0)}%`, confidence, pick };
 }
 
 // API Routes
@@ -340,14 +350,14 @@ app.get('/api/dudoan', (req, res) => {
   const streak = getStreak(history);
   const signal = calcSignal(taiPct, xiuPct, d.subTick, d.state, streak);
   
-  // Lưu dự đoán khi đang BETTING và tick >= 15 (đủ dữ liệu)
+  // Vẫn có thể lưu dự đoán nếu gọi API thủ công
   if (d.state === 'BETTING' && d.subTick >= 15 && signal.pick && (!lastPrediction || lastPrediction.id !== d.id)) {
     lastPrediction = {
       id: d.id,
       predicted: signal.pick,
       confidence: signal.confidence
     };
-    console.log(`[PRED] #${d.id}: Dự đoán ${signal.pick} (${signal.confidence.toFixed(0)}%)`);
+    console.log(`[PRED] #${d.id}: Dự đoán ${signal.pick} (${signal.confidence.toFixed(0)}%) (qua API)`);
   }
   
   res.json({
@@ -378,7 +388,6 @@ app.post('/api/dulieu', (req, res) => {
   res.json({ success: true });
 });
 
-// API để download sessions.jsonl
 app.get('/api/sessions', (req, res) => {
   fs.readFile('sessions.jsonl', 'utf8', (err, data) => {
     if (err) {
@@ -393,7 +402,6 @@ app.get('/api/sessions', (req, res) => {
   });
 });
 
-// API để xóa sessions.jsonl (reset)
 app.delete('/api/sessions', (req, res) => {
   fs.unlink('sessions.jsonl', (err) => {
     if (err && err.code !== 'ENOENT') {
@@ -404,7 +412,6 @@ app.delete('/api/sessions', (req, res) => {
   });
 });
 
-// API /api/dungsai - Lấy toàn bộ lịch sử dự đoán (không giới hạn)
 app.get('/api/dungsai', (req, res) => {
   const limit = parseInt(req.query.limit) || null;
   const offset = parseInt(req.query.offset) || 0;
@@ -419,7 +426,6 @@ app.get('/api/dungsai', (req, res) => {
       catch { return null; }
     }).filter(p => p);
     
-    // Sắp xếp theo id giảm dần (mới nhất trước)
     predictions.sort((a, b) => b.id - a.id);
     
     const total = predictions.length;
@@ -433,14 +439,13 @@ app.get('/api/dungsai', (req, res) => {
   });
 });
 
-// API xóa dữ liệu dự đoán
 app.delete('/api/dungsai', (req, res) => {
   fs.unlink('predictions.jsonl', (err) => {
     if (err && err.code !== 'ENOENT') {
       return res.json({ error: 'Lỗi xóa file' });
     }
     console.log('[FILE] Deleted predictions.jsonl');
-    predHistory = []; // Xóa luôn trong bộ nhớ
+    predHistory = [];
     res.json({ success: true, message: 'Đã xóa dữ liệu dự đoán' });
   });
 });
@@ -449,5 +454,5 @@ app.delete('/api/dungsai', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server on port ${PORT}`);
   console.log(`👤 User: ${USERNAME}`);
-  connectWS(); // Tự động login + connect
+  connectWS();
 });
