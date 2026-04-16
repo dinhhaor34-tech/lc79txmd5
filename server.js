@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const WebSocket = require('ws');
+const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 
@@ -264,79 +264,32 @@ app.post('/api/dulieu', (req, res) => {
   res.json({ success: true });
 });
 
-// WebSocket connection to game server
-function connectWebSocket() {
-  const WS_URL = 'wss://api-t1.tele68.com/ws/sicbo';
-  
-  console.log('🔌 Connecting to WebSocket...');
-  wsClient = new WebSocket(WS_URL);
-  
-  wsClient.on('open', () => {
-    console.log('✅ WebSocket connected');
-    if (reconnectInterval) {
-      clearInterval(reconnectInterval);
-      reconnectInterval = null;
-    }
-  });
-  
-  wsClient.on('message', (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      
-      if (msg.type === 'tick') {
-        currentTick = msg.data;
-      } else if (msg.type === 'result') {
-        const resultData = msg.data;
-        history.unshift(resultData);
-        if (history.length > 100) history = history.slice(0, 100);
-        
-        // Update prediction
-        const pred = predHistory.find(p => p.id === resultData.sessionId || p.id === +resultData.sessionId);
-        if (pred && !pred.result) {
-          pred.result = resultData.result;
-          pred.correct = pred.predicted === resultData.result;
-          pred.dices = resultData.dice;
-        }
-        
-        saveData();
-        console.log(`✅ Result #${resultData.sessionId}: ${resultData.result}`);
-      }
-    } catch (err) {
-      console.error('❌ Error parsing message:', err);
-    }
-  });
-  
-  wsClient.on('error', (err) => {
-    console.error('❌ WebSocket error:', err.message);
-  });
-  
-  wsClient.on('close', () => {
-    console.log('🔌 WebSocket disconnected, reconnecting in 5s...');
-    wsClient = null;
+// Polling game data instead of WebSocket (more reliable on Railway)
+let pollingInterval = null;
+
+async function pollGameData() {
+  try {
+    const response = await fetch('https://api-t1.tele68.com/api/sicbo/current');
+    const data = await response.json();
     
-    if (!reconnectInterval) {
-      reconnectInterval = setInterval(() => {
-        if (!wsClient || wsClient.readyState === WebSocket.CLOSED) {
-          connectWebSocket();
-        }
-      }, 5000);
+    if (data.tick) {
+      currentTick = data;
     }
-  });
+    
+    console.log('✅ Polled game data successfully');
+  } catch (err) {
+    console.error('❌ Error polling game data:', err.message);
+  }
 }
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 API endpoints:`);
-  console.log(`   GET  /api/snapshot`);
-  console.log(`   GET  /api/history`);
-  console.log(`   GET  /api/predictions`);
-  console.log(`   GET  /api/dudoan`);
-  console.log(`   POST /api/dulieu`);
-  
-  // Connect to WebSocket
-  connectWebSocket();
-});
+function startPolling() {
+  console.log('📡 Starting polling mode...');
+  pollGameData(); // Poll immediately
+  pollingInterval = setInterval(pollGameData, 2000); // Poll every 2 seconds
+}
+
+// Start polling instead of WebSocket
+startPolling();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
