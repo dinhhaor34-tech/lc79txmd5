@@ -15,7 +15,8 @@ app.use(express.json());
 let history = [];
 let predHistory = [];
 let currentTick = null;
-let lastPrediction = null; // Lưu dự đoán cuối cùng
+let lastPrediction = null;       // Lưu { id, predicted, confidence }
+let lastSnapshot10s = null;      // Lưu snapshot đầy đủ lúc 10 giây
 
 // Auth
 const USERNAME = process.env.TELE68_USER || "dinhhaor150";
@@ -112,55 +113,6 @@ function isTokenExpiringSoon(token) {
 const WS_URL = "wss://wtxmd52.tele68.com/txmd5/?EIO=4&transport=websocket";
 let ws = null;
 
-// Helper functions
-function getStreak(hist) {
-  if (!hist.length) return { count: 0, type: '--' };
-  const first = hist[0].result;
-  let count = 0;
-  for (const h of hist) { if (h.result === first) count++; else break; }
-  return { count, type: first };
-}
-
-function calcSignal(taiPct, xiuPct, tick, state, streak) {
-  if (state !== 'BETTING' || tick > 30) {
-    return { icon: '⏳', text: 'Chờ dữ liệu', confidence: 0, pick: null };
-  }
-
-  let scoreTai = 50, scoreXiu = 50;
-  const diff = Math.abs(taiPct - xiuPct);
-  
-  // Ưu tiên 1: Cầu xen kẽ (accuracy 62-70%)
-  const recent2 = history.slice(0, 2);
-  if (recent2.length >= 2 && recent2[0].result !== recent2[1].result) {
-    if (recent2[0].result === 'TAI') {
-      scoreXiu += 40;
-    } else {
-      scoreTai += 40;
-    }
-  } else {
-    if (taiPct > xiuPct) {
-      scoreTai += diff * 0.5;
-    } else {
-      scoreXiu += diff * 0.5;
-    }
-  }
-  
-  if (streak.count >= 4) {
-    const bonus = Math.min(streak.count * 2, 10);
-    if (streak.type === 'TAI') scoreXiu += bonus;
-    else scoreTai += bonus;
-  }
-
-  const totalScore = scoreTai + scoreXiu;
-  const taiConf = scoreTai / totalScore * 100;
-  const xiuConf = scoreXiu / totalScore * 100;
-  const pick = taiConf > xiuConf ? 'TAI' : 'XIU';
-  const confidence = Math.max(taiConf, xiuConf);
-  const icon = confidence >= 65 ? '🎯' : confidence >= 55 ? '📈' : '🤔';
-
-  return { icon, text: `${pick} — ${confidence.toFixed(0)}%`, confidence, pick };
-}
-
 async function connectWS() {
   if (!currentToken || isTokenExpiringSoon(currentToken)) {
     try {
@@ -219,9 +171,9 @@ async function connectWS() {
           data: payload.data
         };
 
-        // Tự động tạo dự đoán khi đủ điều kiện
         const d = currentTick;
-        if (d.state === 'BETTING' && d.subTick >= 15 && d.data) {
+        // KHOÁ DỰ ĐOÁN TẠI 10 GIÂY
+        if (d.state === 'BETTING' && d.subTick === 10 && d.data) {
           const data = d.data;
           const total = data.totalAmountPerType.TAI + data.totalAmountPerType.XIU;
           if (total > 0) {
@@ -236,11 +188,31 @@ async function connectWS() {
                 predicted: signal.pick,
                 confidence: signal.confidence
               };
-              console.log(`[PRED] #${d.id}: Dự đoán ${signal.pick} (${signal.confidence.toFixed(0)}%)`);
+
+              // Lưu snapshot đầy đủ vào biến toàn cục (để dùng khi có kết quả)
+              lastSnapshot10s = {
+                id: d.id,
+                time: new Date().toISOString(),
+                tick: d.subTick,
+                taiPct: parseFloat(taiPct.toFixed(2)),
+                xiuPct: parseFloat(xiuPct.toFixed(2)),
+                taiAmt: data.totalAmountPerType.TAI,
+                xiuAmt: data.totalAmountPerType.XIU,
+                totalAmt: total,
+                prediction: signal.pick,
+                confidence: signal.confidence
+              };
+
+              console.log(`[PRED] #${d.id}: Dự đoán ${signal.pick} (${signal.confidence.toFixed(0)}%) tại 10s`);
+
+              // Vẫn lưu riêng snapshots_10s.jsonl (nếu cần)
+              fs.appendFile('snapshots_10s.jsonl', JSON.stringify(lastSnapshot10s) + '\n', (err) => {
+                if (err) console.error('[FILE] Lỗi lưu snapshot 10s:', err.message);
+                else console.log(`[SNAPSHOT] Đã lưu dữ liệu 10s cho phiên #${d.id}`);
+              });
             }
           }
         }
-
       } else if (event === 'session-result') {
         const entry = {
           sessionId: payload.md5Raw.split(':')[0],
@@ -251,6 +223,7 @@ async function connectWS() {
         if (history.length > 100) history = history.slice(0, 100);
         console.log(`[RESULT] #${entry.sessionId}: ${entry.result}`);
         
+        // 1. Lưu dữ liệu cuối phiên vào sessions.jsonl
         if (currentTick && currentTick.data) {
           const data = currentTick.data;
           const total = data.totalAmountPerType.TAI + data.totalAmountPerType.XIU;
@@ -278,14 +251,16 @@ async function connectWS() {
           
           const line = JSON.stringify(sessionData) + '\n';
           fs.appendFile('sessions.jsonl', line, (err) => {
-            if (err) console.error('[FILE] Error saving:', err.message);
+            if (err) console.error('[FILE] Error saving sessions:', err.message);
             else console.log(`[FILE] Saved #${entry.sessionId} to sessions.jsonl`);
           });
         }
-        
-        // Kiểm tra dự đoán
-        if (lastPrediction && lastPrediction.id == entry.sessionId) {
+
+        // 2. Xử lý dự đoán đúng/sai và tạo training data
+        if (lastPrediction && lastPrediction.id == entry.sessionId && lastSnapshot10s) {
           const correct = lastPrediction.predicted === entry.result;
+          
+          // Lưu vào predictions.jsonl (lịch sử đúng/sai)
           const predEntry = {
             id: parseInt(entry.sessionId),
             predicted: lastPrediction.predicted,
@@ -303,9 +278,27 @@ async function connectWS() {
           
           predHistory.unshift(predEntry);
           if (predHistory.length > 50) predHistory = predHistory.slice(0, 50);
-          
+
+          // 3. TẠO TRAINING DATA: Kết hợp snapshot 10s + kết quả
+          const trainingEntry = {
+            ...lastSnapshot10s,               // toàn bộ dữ liệu lúc 10s
+            result: entry.result,             // kết quả thực tế
+            dices: entry.dice,                // xúc xắc
+            sum: entry.dice.reduce((a, b) => a + b, 0),
+            correct: correct,
+            resultTime: new Date().toISOString()
+          };
+
+          fs.appendFile('training_data.jsonl', JSON.stringify(trainingEntry) + '\n', (err) => {
+            if (err) console.error('[FILE] Lỗi lưu training data:', err.message);
+            else console.log(`[TRAINING] Đã lưu dữ liệu huấn luyện cho phiên #${entry.sessionId}`);
+          });
+
           console.log(`[PRED] #${entry.sessionId}: ${lastPrediction.predicted} → ${entry.result} ${correct ? '✅' : '❌'}`);
+          
+          // Reset sau khi dùng
           lastPrediction = null;
+          lastSnapshot10s = null;
         }
       } else if (event === 'new-session') {
         console.log(`[NEW] #${payload.id}`);
@@ -325,7 +318,55 @@ async function connectWS() {
   });
 }
 
-// API Routes
+// Helper functions
+function getStreak(hist) {
+  if (!hist.length) return { count: 0, type: '--' };
+  const first = hist[0].result;
+  let count = 0;
+  for (const h of hist) { if (h.result === first) count++; else break; }
+  return { count, type: first };
+}
+
+function calcSignal(taiPct, xiuPct, tick, state, streak) {
+  if (state !== 'BETTING' || tick > 30) {
+    return { icon: '⏳', text: 'Chờ dữ liệu', confidence: 0, pick: null };
+  }
+
+  let scoreTai = 50, scoreXiu = 50;
+  const diff = Math.abs(taiPct - xiuPct);
+  
+  const recent2 = history.slice(0, 2);
+  if (recent2.length >= 2 && recent2[0].result !== recent2[1].result) {
+    if (recent2[0].result === 'TAI') {
+      scoreXiu += 40;
+    } else {
+      scoreTai += 40;
+    }
+  } else {
+    if (taiPct > xiuPct) {
+      scoreTai += diff * 0.5;
+    } else {
+      scoreXiu += diff * 0.5;
+    }
+  }
+  
+  if (streak.count >= 4) {
+    const bonus = Math.min(streak.count * 2, 10);
+    if (streak.type === 'TAI') scoreXiu += bonus;
+    else scoreTai += bonus;
+  }
+
+  const totalScore = scoreTai + scoreXiu;
+  const taiConf = scoreTai / totalScore * 100;
+  const xiuConf = scoreXiu / totalScore * 100;
+  const pick = taiConf > xiuConf ? 'TAI' : 'XIU';
+  const confidence = Math.max(taiConf, xiuConf);
+  const icon = confidence >= 65 ? '🎯' : confidence >= 55 ? '📈' : '🤔';
+
+  return { icon, text: `${pick} — ${confidence.toFixed(0)}%`, confidence, pick };
+}
+
+// ---------- API Routes ----------
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Tài Xỉu API' });
 });
@@ -350,13 +391,28 @@ app.get('/api/dudoan', (req, res) => {
   const streak = getStreak(history);
   const signal = calcSignal(taiPct, xiuPct, d.subTick, d.state, streak);
   
-  // Vẫn có thể lưu dự đoán nếu gọi API thủ công
-  if (d.state === 'BETTING' && d.subTick >= 15 && signal.pick && (!lastPrediction || lastPrediction.id !== d.id)) {
+  // Hỗ trợ gọi API thủ công (không ảnh hưởng tự động)
+  if (d.state === 'BETTING' && d.subTick === 10 && signal.pick && (!lastPrediction || lastPrediction.id !== d.id)) {
     lastPrediction = {
       id: d.id,
       predicted: signal.pick,
       confidence: signal.confidence
     };
+    // Cập nhật snapshot nếu chưa có
+    if (!lastSnapshot10s) {
+      lastSnapshot10s = {
+        id: d.id,
+        time: new Date().toISOString(),
+        tick: d.subTick,
+        taiPct: parseFloat(taiPct.toFixed(2)),
+        xiuPct: parseFloat(xiuPct.toFixed(2)),
+        taiAmt: data.totalAmountPerType.TAI,
+        xiuAmt: data.totalAmountPerType.XIU,
+        totalAmt: total,
+        prediction: signal.pick,
+        confidence: signal.confidence
+      };
+    }
     console.log(`[PRED] #${d.id}: Dự đoán ${signal.pick} (${signal.confidence.toFixed(0)}%) (qua API)`);
   }
   
@@ -388,6 +444,7 @@ app.post('/api/dulieu', (req, res) => {
   res.json({ success: true });
 });
 
+// API lấy dữ liệu sessions cuối phiên
 app.get('/api/sessions', (req, res) => {
   fs.readFile('sessions.jsonl', 'utf8', (err, data) => {
     if (err) {
@@ -412,6 +469,7 @@ app.delete('/api/sessions', (req, res) => {
   });
 });
 
+// API lấy lịch sử đúng/sai (predictions)
 app.get('/api/dungsai', (req, res) => {
   const limit = parseInt(req.query.limit) || null;
   const offset = parseInt(req.query.offset) || 0;
@@ -447,6 +505,50 @@ app.delete('/api/dungsai', (req, res) => {
     console.log('[FILE] Deleted predictions.jsonl');
     predHistory = [];
     res.json({ success: true, message: 'Đã xóa dữ liệu dự đoán' });
+  });
+});
+
+// API lấy snapshot 10s (cũ)
+app.get('/api/snapshots10s', (req, res) => {
+  fs.readFile('snapshots_10s.jsonl', 'utf8', (err, data) => {
+    if (err) {
+      return res.json({ error: 'Chưa có dữ liệu', snapshots: [] });
+    }
+    const lines = data.trim().split('\n').filter(l => l);
+    const snapshots = lines.map(l => {
+      try { return JSON.parse(l); }
+      catch { return null; }
+    }).filter(s => s);
+    res.json({ snapshots, count: snapshots.length });
+  });
+});
+
+// API QUAN TRỌNG NHẤT: Lấy dữ liệu huấn luyện (có cả features lúc 10s và kết quả)
+app.get('/api/training-data', (req, res) => {
+  const limit = parseInt(req.query.limit) || null;
+  const offset = parseInt(req.query.offset) || 0;
+
+  fs.readFile('training_data.jsonl', 'utf8', (err, data) => {
+    if (err) {
+      return res.json({ error: 'Chưa có dữ liệu huấn luyện', data: [], total: 0 });
+    }
+    const lines = data.trim().split('\n').filter(l => l);
+    const training = lines.map(l => {
+      try { return JSON.parse(l); }
+      catch { return null; }
+    }).filter(t => t);
+    
+    // Sắp xếp mới nhất trước
+    training.sort((a, b) => b.id - a.id);
+    
+    const total = training.length;
+    let result = training;
+    if (limit !== null && limit > 0) {
+      const start = offset;
+      const end = offset + limit;
+      result = training.slice(start, end);
+    }
+    res.json({ data: result, total });
   });
 });
 
