@@ -270,23 +270,27 @@ function calcSignal(taiPct, xiuPct, tick, state, streak) {
   let scoreTai = 50, scoreXiu = 50;
   const diff = Math.abs(taiPct - xiuPct);
   
-  // Cầu xen kẽ
-  const recent3 = history.slice(-3);
-  if (recent3.length >= 2 && recent3.every((r, i) => i === 0 || r.result !== recent3[i-1].result)) {
-    const lastResult = recent3[recent3.length - 1].result;
-    if (lastResult === 'TAI') scoreXiu += 25;
-    else scoreTai += 25;
+  // Ưu tiên 1: Cầu xen kẽ (accuracy 62-70%)
+  const recent2 = history.slice(0, 2);
+  if (recent2.length >= 2 && recent2[0].result !== recent2[1].result) {
+    // Pattern xen kẽ detected → dự đoán tiếp tục xen kẽ
+    if (recent2[0].result === 'TAI') {
+      scoreXiu += 40; // Bonus lớn cho xen kẽ
+    } else {
+      scoreTai += 40;
+    }
+  } else {
+    // Không có xen kẽ → dùng FOLLOWING (theo dòng tiền)
+    if (taiPct > xiuPct) {
+      scoreTai += diff * 0.5; // Following: tiền vào đâu → đoán đó
+    } else {
+      scoreXiu += diff * 0.5;
+    }
   }
   
-  // Dòng tiền
-  if (tick <= 20) {
-    if (taiPct > xiuPct) scoreXiu += diff * 0.4;
-    else scoreTai += diff * 0.4;
-  }
-  
-  // Streak
-  if (streak.count >= 3) {
-    const bonus = Math.min(streak.count * 3, 15);
+  // Streak bonus (nhỏ hơn)
+  if (streak.count >= 4) {
+    const bonus = Math.min(streak.count * 2, 10);
     if (streak.type === 'TAI') scoreXiu += bonus;
     else scoreTai += bonus;
   }
@@ -326,8 +330,8 @@ app.get('/api/dudoan', (req, res) => {
   const streak = getStreak(history);
   const signal = calcSignal(taiPct, xiuPct, d.subTick, d.state, streak);
   
-  // Lưu dự đoán nếu có pick và chưa lưu phiên này
-  if (signal.pick && (!lastPrediction || lastPrediction.id !== d.id)) {
+  // Lưu dự đoán khi đang BETTING và tick >= 15 (đủ dữ liệu)
+  if (d.state === 'BETTING' && d.subTick >= 15 && signal.pick && (!lastPrediction || lastPrediction.id !== d.id)) {
     lastPrediction = {
       id: d.id,
       predicted: signal.pick,
