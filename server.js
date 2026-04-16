@@ -228,10 +228,20 @@ async function connectWS() {
             confidence: lastPrediction.confidence,
             result: entry.result,
             dices: entry.dice,
-            correct: correct
+            correct: correct,
+            time: new Date().toISOString()
           };
+          
+          // Ghi vào file predictions.jsonl (không giới hạn)
+          fs.appendFile('predictions.jsonl', JSON.stringify(predEntry) + '\n', (err) => {
+            if (err) console.error('[FILE] Error saving prediction:', err.message);
+            else console.log(`[PRED] Saved prediction #${entry.sessionId} to predictions.jsonl`);
+          });
+          
+          // Vẫn lưu vào bộ nhớ cho API snapshot (giới hạn 50)
           predHistory.unshift(predEntry);
           if (predHistory.length > 50) predHistory = predHistory.slice(0, 50);
+          
           console.log(`[PRED] #${entry.sessionId}: ${lastPrediction.predicted} → ${entry.result} ${correct ? '✅' : '❌'}`);
           lastPrediction = null;
         }
@@ -391,6 +401,47 @@ app.delete('/api/sessions', (req, res) => {
     }
     console.log('[FILE] Deleted sessions.jsonl');
     res.json({ success: true, message: 'Đã xóa dữ liệu' });
+  });
+});
+
+// API /api/dungsai - Lấy toàn bộ lịch sử dự đoán (không giới hạn)
+app.get('/api/dungsai', (req, res) => {
+  const limit = parseInt(req.query.limit) || null;
+  const offset = parseInt(req.query.offset) || 0;
+  
+  fs.readFile('predictions.jsonl', 'utf8', (err, data) => {
+    if (err) {
+      return res.json({ error: 'Chưa có dữ liệu dự đoán', predictions: [], total: 0 });
+    }
+    const lines = data.trim().split('\n').filter(l => l);
+    const predictions = lines.map(l => {
+      try { return JSON.parse(l); }
+      catch { return null; }
+    }).filter(p => p);
+    
+    // Sắp xếp theo id giảm dần (mới nhất trước)
+    predictions.sort((a, b) => b.id - a.id);
+    
+    const total = predictions.length;
+    let result = predictions;
+    if (limit !== null && limit > 0) {
+      const start = offset;
+      const end = offset + limit;
+      result = predictions.slice(start, end);
+    }
+    res.json({ predictions: result, total });
+  });
+});
+
+// API xóa dữ liệu dự đoán
+app.delete('/api/dungsai', (req, res) => {
+  fs.unlink('predictions.jsonl', (err) => {
+    if (err && err.code !== 'ENOENT') {
+      return res.json({ error: 'Lỗi xóa file' });
+    }
+    console.log('[FILE] Deleted predictions.jsonl');
+    predHistory = []; // Xóa luôn trong bộ nhớ
+    res.json({ success: true, message: 'Đã xóa dữ liệu dự đoán' });
   });
 });
 
