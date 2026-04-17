@@ -120,6 +120,49 @@ app.get("/predict", (req, res) => {
   res.json({ status: "ok" });
 });
 
+// Xem toàn bộ sessions.jsonl dạng JSON
+app.get("/sessions", (req, res) => {
+  const fs = require("fs");
+  const DATA_FILE = require("path").join(__dirname, "sessions.jsonl");
+  if (!fs.existsSync(DATA_FILE)) return res.json({ status: "no_data", data: [] });
+  const lines = fs.readFileSync(DATA_FILE, "utf8").trim().split("\n").filter(Boolean);
+  const data = lines.map(l => JSON.parse(l)).reverse();
+  res.json({ status: "ok", count: data.length, data });
+});
+
+// Xem lịch sử dự đoán + kết quả thực tế
+app.get("/predictions", (req, res) => {
+  const fs = require("fs");
+  const DATA_FILE = require("path").join(__dirname, "sessions.jsonl");
+  if (!fs.existsSync(DATA_FILE)) return res.json({ status: "no_data", data: [] });
+  const lines = fs.readFileSync(DATA_FILE, "utf8").trim().split("\n").filter(Boolean);
+  const sessions = lines.map(l => JSON.parse(l)).reverse();
+
+  // Chỉ lấy phiên có dự đoán
+  const predicted = sessions.filter(s => s.predicted);
+  const correct = predicted.filter(s => s.predicted === s.result).length;
+  const accuracy = predicted.length > 0 ? (correct / predicted.length * 100).toFixed(1) : null;
+
+  res.json({
+    status: "ok",
+    total: predicted.length,
+    correct,
+    accuracy: accuracy ? `${accuracy}%` : "chưa có dữ liệu",
+    data: predicted.map(s => ({
+      id: s.id,
+      time: s.time,
+      predicted: s.predicted,
+      result: s.result,
+      correct: s.predicted === s.result,
+      confidence: s.confidenceAtLock,
+      taiPct: s.taiPctAtLock,
+      xiuPct: s.xiuPctAtLock,
+      dices: s.dices,
+      sum: s.sum
+    }))
+  });
+});
+
 app.get("/analyze", (req, res) => {
   const fs = require("fs");
   const DATA_FILE = require("path").join(__dirname, "sessions.jsonl");
