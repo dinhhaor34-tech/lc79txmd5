@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tài Xỉu - Phân Tích Dòng Tiền</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', sans-serif; padding: 16px; }
+  h1 { text-align: center; font-size: 1.4rem; color: #58a6ff; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 900px; margin: 0 auto; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px; }
+  .card h2 { font-size: 0.85rem; color: #8b949e; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  #tick-num { font-size: 3.5rem; font-weight: bold; text-align: center; line-height: 1; }
+  #tick-state { text-align: center; font-size: 0.9rem; margin-top: 4px; color: #8b949e; }
+  #session-id { text-align: center; font-size: 0.75rem; color: #484f58; margin-top: 4px; }
+  .ratio-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .ratio-label { width: 36px; font-weight: bold; font-size: 0.9rem; }
+  .ratio-bar-wrap { flex: 1; background: #21262d; border-radius: 4px; height: 22px; overflow: hidden; }
+  .ratio-bar { height: 100%; border-radius: 4px; transition: width 0.4s ease; display: flex; align-items: center; padding-left: 8px; font-size: 0.8rem; font-weight: bold; }
+  .bar-tai { background: linear-gradient(90deg, #f85149, #ff7b72); }
+  .bar-xiu { background: linear-gradient(90deg, #1f6feb, #58a6ff); }
+  .ratio-pct { width: 44px; text-align: right; font-size: 0.85rem; }
+  .money-row { display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.8rem; color: #8b949e; }
+  .money-val { font-weight: bold; color: #e6edf3; }
+  #signal-box { text-align: center; padding: 16px 8px; }
+  #signal-icon { font-size: 2.5rem; }
+  #signal-text { font-size: 1.1rem; font-weight: bold; margin-top: 6px; }
+  #signal-reason { font-size: 0.78rem; color: #8b949e; margin-top: 4px; line-height: 1.6; }
+  #history-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .hist-item { padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; }
+  .hist-TAI { background: #3d1a1a; color: #ff7b72; border: 1px solid #f85149; }
+  .hist-XIU { background: #0d2044; color: #58a6ff; border: 1px solid #1f6feb; }
+  #streak-box { text-align: center; }
+  #streak-num { font-size: 2.2rem; font-weight: bold; }
+  #streak-label { font-size: 0.85rem; color: #8b949e; margin-top: 4px; }
+  .full-width { grid-column: 1 / -1; }
+  #conn-status { text-align: center; font-size: 0.75rem; margin-bottom: 12px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+  .dot-green { background: #3fb950; }
+  .dot-red { background: #f85149; }
+  .locked-card { border-color: #d29922 !important; box-shadow: 0 0 12px rgba(210,153,34,0.3); }
+</style>
+</head>
+<body>
+<h1>📊 Phân Tích Dòng Tiền Tài Xỉu</h1>
+<div id="conn-status"><span class="dot dot-red" id="conn-dot"></span><span id="conn-text">Đang kết nối...</span></div>
+
+<div class="grid">
+  <div class="card">
+    <h2>⏱ Đếm Ngược</h2>
+    <div id="tick-num" style="color:#58a6ff">--</div>
+    <div id="tick-state">--</div>
+    <div id="session-id">Phiên: --</div>
+  </div>
+
+  <div class="card">
+    <h2>🔥 Chuỗi Hiện Tại</h2>
+    <div id="streak-box">
+      <div id="streak-num">--</div>
+      <div id="streak-label">--</div>
+    </div>
+  </div>
+
+  <div class="card full-width">
+    <h2>💰 Dòng Tiền Phiên Này</h2>
+    <div class="ratio-row">
+      <div class="ratio-label" style="color:#ff7b72">TÀI</div>
+      <div class="ratio-bar-wrap"><div class="ratio-bar bar-tai" id="bar-tai" style="width:50%">50%</div></div>
+      <div class="ratio-pct" id="pct-tai">50%</div>
+    </div>
+    <div class="ratio-row">
+      <div class="ratio-label" style="color:#58a6ff">XỈU</div>
+      <div class="ratio-bar-wrap"><div class="ratio-bar bar-xiu" id="bar-xiu" style="width:50%">50%</div></div>
+      <div class="ratio-pct" id="pct-xiu">50%</div>
+    </div>
+    <div class="money-row">
+      <span>Tổng tiền: <span class="money-val" id="total-money">--</span></span>
+      <span>Người chơi: <span class="money-val" id="total-users">--</span></span>
+    </div>
+  </div>
+
+  <div class="card full-width" id="signal-card">
+    <h2>🎯 Tín Hiệu Phân Tích</h2>
+    <div id="signal-box">
+      <div id="signal-icon">⏳</div>
+      <div id="signal-text">Đang chờ dữ liệu...</div>
+      <div id="signal-reason"></div>
+      <div id="conf-bar"></div>
+    </div>
+  </div>
+
+  <div class="card full-width">
+    <h2>📋 Lịch Sử Gần Đây</h2>
+    <div id="history-list">Đang tải...</div>
+  </div>
+
+  <div class="card full-width">
+    <h2>🎯 Lịch Sử Dự Đoán <span id="pred-stats" style="color:#8b949e;font-weight:normal;font-size:0.8rem"></span></h2>
+    <div id="pred-list" style="display:flex;flex-direction:column;gap:6px">Chưa có dữ liệu...</div>
+  </div>
+</div>
+
+<script>
+  let history = [];
+  let predHistory = []; // lịch sử dự đoán đúng/sai
+  const LOCK_TICK = 10;
+  let lockedSignal = null;
+  let lockedSessionId = null;
+  let tickSnapshots = [];
+
+  function fmt(n) {
+    if (n >= 1e9) return (n/1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n/1e3).toFixed(0) + 'K';
+    return n;
+  }
+
+  function getStreak(hist) {
+    if (!hist.length) return { count: 0, type: '--' };
+    const first = hist[0].result;
+    let count = 0;
+    for (const h of hist) { if (h.result === first) count++; else break; }
+    return { count, type: first };
+  }
+
+  function recordSnap(tick, taiAmt, xiuAmt) {
+    tickSnapshots.push({ tick, taiAmt, xiuAmt });
+    if (tickSnapshots.length > 20) tickSnapshots.shift();
+  }
+
+  function getVelocity() {
+    if (tickSnapshots.length < 3) return null;
+    const recent = tickSnapshots.slice(-5);
+    const oldest = recent[0], newest = recent[recent.length - 1];
+    const dTai = newest.taiAmt - oldest.taiAmt;
+    const dXiu = newest.xiuAmt - oldest.xiuAmt;
+    const total = dTai + dXiu;
+    if (total <= 0) return null;
+    return { taiVel: dTai / total * 100, xiuVel: dXiu / total * 100 };
+  }
+
+  function getHistStats() {
+    if (history.length < 5) return null;
+    const last = history.slice(0, Math.min(history.length, 50));
+    const taiCount = last.filter(h => h.result === 'TAI').length;
+    return { taiRate: taiCount / last.length * 100, xiuRate: (last.length - taiCount) / last.length * 100, total: last.length };
+  }
+
+  function calcSignal(taiPct, xiuPct, tick, state, streak, taiAmt, xiuAmt) {
+    if (state === 'RESULT') return { icon: '🎲', text: 'Đang hiện kết quả', reason: '', color: '#8b949e', confidence: 0, pick: null };
+    if (state === 'PREPARE_TO_START') return { icon: '⏳', text: 'Chuẩn bị phiên mới', reason: '', color: '#8b949e', confidence: 0, pick: null };
+    if (tick > 30) return { icon: '⏳', text: 'Chờ thêm dữ liệu', reason: 'Còn quá sớm để phân tích', color: '#8b949e', confidence: 0, pick: null };
+    if (state !== 'BETTING') return { icon: '⏳', text: 'Chờ thêm dữ liệu', reason: '', color: '#8b949e', confidence: 0, pick: null };
+
+    recordSnap(tick, taiAmt, xiuAmt);
+    const velocity = getVelocity();
+    const histStats = getHistStats();
+    const diff = Math.abs(taiPct - xiuPct);
+    let scoreTai = 50, scoreXiu = 50;
+    let reasons = [];
+
+    // 1. Dòng tiền
+    if (tick <= 20) {
+      const w = tick <= LOCK_TICK ? 2.0 : 1.0;
+      if (taiPct > xiuPct) {
+        scoreXiu += diff * 0.4 * w;
+        reasons.push(`💸 Dòng tiền lệch <b style="color:#ff7b72">TÀI ${taiPct.toFixed(0)}%</b> vs <b style="color:#58a6ff">XỈU ${xiuPct.toFixed(0)}%</b>`);
+      } else {
+        scoreTai += diff * 0.4 * w;
+        reasons.push(`💸 Dòng tiền lệch <b style="color:#58a6ff">XỈU ${xiuPct.toFixed(0)}%</b> vs <b style="color:#ff7b72">TÀI ${taiPct.toFixed(0)}%</b>`);
+      }
+    }
+
+    // 2. Velocity (contrarian strategy)
+    // weight 0.5 cho tick ≤ 15 (giai đoạn nóng, velocity tin cậy hơn)
+    // weight 0.3 cho tick 16-20 (giai đoạn trung gian, velocity ít tin cậy hơn)
+    if (velocity && tick <= 20) {
+      const velDiff = Math.abs(velocity.taiVel - velocity.xiuVel);
+      if (velDiff > 10) {
+        const velWeight = tick <= 15 ? 0.5 : 0.3;
+        const fast = velocity.taiVel > velocity.xiuVel ? 'TAI' : 'XIU';
+        if (fast === 'TAI') scoreXiu += velDiff * velWeight;
+        else scoreTai += velDiff * velWeight;
+        const pick = fast === 'TAI' ? 'XỈU' : 'TÀI';
+        reasons.push(`⚡ Tiền đổ nhanh vào <b style="color:${fast==='TAI'?'#ff7b72':'#58a6ff'}">${fast==='TAI'?'TÀI':'XỈU'}</b> → Đặt <b>${pick}</b> (contrarian +${velDiff.toFixed(0)}%)`);
+
+        // 3. Confluence: velocity + dòng tiền đồng thuận contrarian → tín hiệu mạnh hơn
+        // Khi velocity fast side trùng với money flow dominant side, cả hai đều chỉ về cùng hướng
+        const moneyDominant = taiPct > xiuPct ? 'TAI' : 'XIU';
+        if (tick <= 20 && fast === moneyDominant) {
+          if (fast === 'TAI') scoreXiu += 8;
+          else scoreTai += 8;
+          reasons.push(`🎯 Confluence: velocity + dòng tiền đồng thuận → tín hiệu mạnh`);
+        }
+      }
+    }
+
+    // 4. Streak (threshold giảm từ 3 → 2 để bắt tín hiệu đảo chiều sớm hơn)
+    if (streak.count >= 2) {
+      // streak 2: bonus nhỏ hơn (tín hiệu yếu hơn streak dài)
+      // streak ≥ 3: dùng công thức count*3, tối đa 15
+      const bonus = streak.count === 2 ? 4 : Math.min(streak.count * 3, 15);
+      if (streak.type === 'TAI') scoreXiu += bonus;
+      else scoreTai += bonus;
+      reasons.push(`🔁 Chuỗi <b>${streak.type==='TAI'?'TÀI':'XỈU'}</b> ${streak.count} phiên → xu hướng đảo`);
+    }
+
+    // 5. Balanced money flow: khi dòng tiền cân bằng (45-55%), TAI có xu hướng thắng 71%
+    if (tick <= 20 && taiPct >= 45 && taiPct <= 55 && xiuPct >= 45 && xiuPct <= 55) {
+      scoreTai += 6;
+      reasons.push(`⚖️ Dòng tiền cân bằng (45-55%) → xu hướng TAI`);
+    }
+
+    // 6. Lịch sử
+    if (histStats && histStats.total >= 10) {
+      const hDiff = Math.abs(histStats.taiRate - histStats.xiuRate);
+      if (hDiff > 10) {
+        if (histStats.taiRate > histStats.xiuRate) scoreXiu += hDiff * 0.2;
+        else scoreTai += hDiff * 0.2;
+        reasons.push(`📊 Lịch sử ${histStats.total} phiên: TÀI ${histStats.taiRate.toFixed(0)}% | XỈU ${histStats.xiuRate.toFixed(0)}%`);
+      }
+    }
+
+    const totalScore = scoreTai + scoreXiu;
+    const taiConf = scoreTai / totalScore * 100;
+    const xiuConf = scoreXiu / totalScore * 100;
+    const pick = taiConf > xiuConf ? 'TAI' : 'XIU';
+    const confidence = Math.max(taiConf, xiuConf);
+    const pickColor = pick === 'TAI' ? '#ff7b72' : '#58a6ff';
+    const pickLabel = pick === 'TAI' ? 'TÀI' : 'XỈU';
+    const icon = confidence >= 65 ? '🎯' : confidence >= 55 ? '📈' : '🤔';
+
+    return { icon, text: `${pickLabel} — ${confidence.toFixed(0)}%`, color: pickColor, reason: reasons.join('<br>'), confidence, pick, taiConf, xiuConf, scoreTai, scoreXiu };
+  }
+
+  function renderSignal(sig, locked) {
+    const card = document.getElementById('signal-card');
+    if (locked) card.classList.add('locked-card');
+    else card.classList.remove('locked-card');
+
+    const lockBadge = locked
+      ? `<div style="display:inline-block;background:#d29922;color:#000;font-size:0.75rem;font-weight:bold;padding:3px 12px;border-radius:20px;margin-bottom:8px">🔒 ĐÃ CHỐT — VÀO TAY ĐI!</div><br>`
+      : '';
+
+    document.getElementById('signal-icon').textContent = sig.icon;
+    document.getElementById('signal-text').innerHTML = lockBadge + `<span style="color:${sig.color};font-size:${locked?'1.6rem':'1.1rem'};font-weight:bold">${sig.text}</span>`;
+    document.getElementById('signal-reason').innerHTML = sig.reason;
+
+    if (sig.pick && sig.taiConf !== undefined) {
+      const tW = sig.taiConf.toFixed(0);
+      const xW = sig.xiuConf.toFixed(0);
+      document.getElementById('conf-bar').innerHTML = `
+        <div style="display:flex;height:28px;border-radius:6px;overflow:hidden;margin-top:10px">
+          <div style="width:${tW}%;background:linear-gradient(90deg,#f85149,#ff7b72);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:bold;color:#fff">${tW}%</div>
+          <div style="width:${xW}%;background:linear-gradient(90deg,#1f6feb,#58a6ff);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:bold;color:#fff">${xW}%</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:#8b949e;margin-top:4px"><span>TÀI</span><span>XỈU</span></div>`;
+    }
+  }
+
+  function updateTick(d) {
+    const tickEl = document.getElementById('tick-num');
+    document.getElementById('tick-state').textContent = { BETTING: '🟢 Đang cược', RESULT: '🎲 Bát đang mở', PREPARE_TO_START: '⏳ Chuẩn bị' }[d.state] || d.state;
+    document.getElementById('session-id').textContent = `Phiên: #${d.id}`;
+
+    // Hiện đúng như game: subTick khi cược, tick khi bát mở
+    if (d.state === 'BETTING') {
+      tickEl.textContent = d.subTick;
+      tickEl.style.color = d.subTick <= LOCK_TICK ? '#f85149' : d.subTick <= 15 ? '#d29922' : '#3fb950';
+    } else if (d.state === 'RESULT') {
+      tickEl.textContent = d.tick;
+      tickEl.style.color = '#8b949e';
+    } else {
+      // PREPARE_TO_START
+      tickEl.textContent = '⏳';
+      tickEl.style.color = '#484f58';
+    }
+
+    const data = d.data;
+    const total = data.totalAmountPerType.TAI + data.totalAmountPerType.XIU;
+    if (total > 0) {
+      const taiPct = data.totalAmountPerType.TAI / total * 100;
+      const xiuPct = 100 - taiPct;
+      document.getElementById('bar-tai').style.width = taiPct + '%';
+      document.getElementById('bar-tai').textContent = taiPct.toFixed(0) + '%';
+      document.getElementById('bar-xiu').style.width = xiuPct + '%';
+      document.getElementById('bar-xiu').textContent = xiuPct.toFixed(0) + '%';
+      document.getElementById('pct-tai').textContent = taiPct.toFixed(1) + '%';
+      document.getElementById('pct-xiu').textContent = xiuPct.toFixed(1) + '%';
+      document.getElementById('total-money').textContent = fmt(total);
+      document.getElementById('total-users').textContent = data.totalUniqueUsers;
+
+      const streak = getStreak(history);
+
+      // Đã lock phiên này → giữ nguyên
+      if (lockedSignal && lockedSessionId === d.id) {
+        renderSignal(lockedSignal, true);
+        return;
+      }
+
+      // Chốt tại LOCK_TICK (dùng subTick vì đó là giây thực tế)
+      if (d.subTick <= LOCK_TICK && d.state === 'BETTING' && !lockedSignal) {
+        lockedSignal = calcSignal(taiPct, xiuPct, d.subTick, d.state, streak, data.totalAmountPerType.TAI, data.totalAmountPerType.XIU);
+        lockedSessionId = d.id;
+        // Gửi prediction lên server để lưu
+        if (lockedSignal.pick) {
+          fetch(`/predict?sessionId=${d.id}&predicted=${lockedSignal.pick}&taiPct=${taiPct.toFixed(2)}&xiuPct=${xiuPct.toFixed(2)}&confidence=${lockedSignal.confidence.toFixed(1)}`);
+          // Thêm vào local history ngay
+          predHistory.unshift({ id: d.id, predicted: lockedSignal.pick, confidence: lockedSignal.confidence, taiPct, xiuPct, result: null, correct: null, dices: null });
+          renderPredHistory();
+        }
+        renderSignal(lockedSignal, true);
+        return;
+      }
+
+      // Chưa lock → cập nhật bình thường
+      renderSignal(calcSignal(taiPct, xiuPct, d.subTick, d.state, streak, data.totalAmountPerType.TAI, data.totalAmountPerType.XIU), false);
+    }
+  }
+
+  function updatePredictionHistory(resultEntry) {
+    // Tìm prediction tương ứng với phiên này
+    const pred = predHistory.find(p => p.id === resultEntry.sessionId || p.id === +resultEntry.sessionId);
+    if (pred && !pred.result) {
+      pred.result = resultEntry.result;
+      pred.correct = pred.predicted === resultEntry.result;
+      pred.dices = resultEntry.dice;
+    }
+    renderPredHistory();
+  }
+
+  function renderPredHistory() {
+    const el = document.getElementById('pred-list');
+    if (!predHistory.length) { el.textContent = 'Chưa có dữ liệu...'; return; }
+
+    const total = predHistory.filter(p => p.result).length;
+    const correct = predHistory.filter(p => p.correct).length;
+    const pct = total > 0 ? (correct / total * 100).toFixed(1) : 0;
+    document.getElementById('pred-stats').textContent = `${correct}/${total} đúng — ${pct}%`;
+
+    el.innerHTML = predHistory.map(p => {
+      const hasResult = !!p.result;
+      const isCorrect = p.correct;
+      const predColor = p.predicted === 'TAI' ? '#ff7b72' : '#58a6ff';
+      const predLabel = p.predicted === 'TAI' ? 'TÀI' : 'XỈU';
+      const resultLabel = p.result ? (p.result === 'TAI' ? 'TÀI' : 'XỈU') : '...';
+      const resultColor = p.result === 'TAI' ? '#ff7b72' : '#58a6ff';
+
+      let badge = '';
+      if (!hasResult) badge = `<span style="background:#21262d;color:#8b949e;padding:2px 8px;border-radius:10px;font-size:0.75rem">⏳ Chờ</span>`;
+      else if (isCorrect) badge = `<span style="background:#0d3321;color:#3fb950;padding:2px 8px;border-radius:10px;font-size:0.75rem;border:1px solid #3fb950">✅ ĐÚNG</span>`;
+      else badge = `<span style="background:#3d1a1a;color:#f85149;padding:2px 8px;border-radius:10px;font-size:0.75rem;border:1px solid #f85149">❌ SAI</span>`;
+
+      const diceStr = p.dices ? p.dices.join('-') : '';
+
+      return `<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:#0d1117;border-radius:6px;font-size:0.82rem">
+        <span style="color:#484f58;width:70px">#${p.id}</span>
+        <span>Dự đoán: <b style="color:${predColor}">${predLabel}</b> <span style="color:#484f58">(${p.confidence ? p.confidence.toFixed(0) : '--'}%)</span></span>
+        <span style="color:#484f58">→</span>
+        <span>Thực tế: <b style="color:${resultColor}">${resultLabel}</b> ${diceStr ? `<span style="color:#484f58">[${diceStr}]</span>` : ''}</span>
+        <span style="margin-left:auto">${badge}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function updateHistory() {
+    const el = document.getElementById('history-list');
+    if (!history.length) { el.textContent = 'Chưa có dữ liệu'; return; }
+    el.innerHTML = history.slice(0, 30).map(h =>
+      `<span class="hist-item hist-${h.result}" title="${h.dice ? h.dice.join('-') : ''}">${h.result==='TAI'?'TÀI':'XỈU'} #${h.sessionId}</span>`
+    ).join('');
+    const streak = getStreak(history);
+    const sc = streak.type === 'TAI' ? '#ff7b72' : '#58a6ff';
+    document.getElementById('streak-num').innerHTML = `<span style="color:${sc}">${streak.count}x ${streak.type==='TAI'?'TÀI':'XỈU'}</span>`;
+    document.getElementById('streak-label').textContent = `${streak.count} phiên liên tiếp`;
+  }
+
+  fetch('/live-snapshot').then(r => r.json()).then(d => {
+    history = d.history || [];
+    predHistory = d.predictions || [];
+    updateHistory();
+    renderPredHistory();
+    if (d.tick) updateTick(d.tick);
+  });
+
+  const es = new EventSource('/live');
+  es.onopen = () => {
+    document.getElementById('conn-dot').className = 'dot dot-green';
+    document.getElementById('conn-text').textContent = 'Đã kết nối realtime';
+  };
+  es.onerror = () => {
+    document.getElementById('conn-dot').className = 'dot dot-red';
+    document.getElementById('conn-text').textContent = 'Mất kết nối, đang thử lại...';
+  };
+  es.addEventListener('tick', e => updateTick(JSON.parse(e.data)));
+  es.addEventListener('result', e => {
+    const d = JSON.parse(e.data);
+    history.unshift(d);
+    updateHistory();
+    // Cập nhật prediction history
+    updatePredictionHistory(d);
+  });
+  es.addEventListener('new-session', () => {
+    lockedSignal = null;
+    lockedSessionId = null;
+    tickSnapshots = [];
+    document.getElementById('signal-card').classList.remove('locked-card');
+    document.getElementById('bar-tai').style.width = '50%';
+    document.getElementById('bar-xiu').style.width = '50%';
+    document.getElementById('total-money').textContent = '--';
+    document.getElementById('total-users').textContent = '--';
+    document.getElementById('conf-bar').innerHTML = '';
+  });
+</script>
+</body>
+</html>

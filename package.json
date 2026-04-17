@@ -1,0 +1,17 @@
+{
+  "name": "taixiu-api",
+  "version": "1.0.0",
+  "main": "api.js",
+  "scripts": {
+    "start": "node api.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "https-proxy-agent": "^7.0.4",
+    "socket.io-client": "^4.8.3",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "fast-check": "^4.6.0"
+  }
+}
