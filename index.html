@@ -196,6 +196,28 @@
       }
     }
 
+    // 3b. Trend signal — dòng tiền đang chạy về đâu từ đầu đến cuối phiên
+    if (tickSnapshots.length >= 2) {
+      const snaps = tickSnapshots.slice().sort((a, b) => b.tick - a.tick);
+      const early = snaps[snaps.length - 1];
+      const late  = snaps[0];
+      if (early && late && (early.taiAmt + early.xiuAmt) > 0 && (late.taiAmt + late.xiuAmt) > 0) {
+        const earlyTaiPct = early.taiAmt / (early.taiAmt + early.xiuAmt) * 100;
+        const lateTaiPct  = late.taiAmt  / (late.taiAmt  + late.xiuAmt)  * 100;
+        const trend = lateTaiPct - earlyTaiPct;
+
+        if (Math.abs(trend) >= 3) {
+          if (trend > 0) {
+            scoreTai += Math.min(trend * 0.8, 10);
+            reasons.push(`📈 Dòng tiền đang chạy về <b style="color:#ff7b72">TÀI</b> (+${trend.toFixed(1)}%)`);
+          } else {
+            scoreXiu += Math.min(Math.abs(trend) * 0.8, 10);
+            reasons.push(`📈 Dòng tiền đang chạy về <b style="color:#58a6ff">XỈU</b> (+${Math.abs(trend).toFixed(1)}%)`);
+          }
+        }
+      }
+    }
+
     // 4. Streak — phân tích momentum, không bẻ cầu bệt mù quáng
     if (streak.count >= 3) {
       let streakMomentumWeak = false;

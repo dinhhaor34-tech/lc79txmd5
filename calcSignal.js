@@ -86,6 +86,30 @@ function calcSignal(taiPct, xiuPct, tick, state, streak, taiAmt, xiuAmt, history
     }
   }
 
+  // 3b. Trend signal — dòng tiền đang chạy về đâu từ đầu đến cuối phiên
+  // So sánh taiPct ở subTick 25 vs subTick 5
+  if (snapshots && snapshots.length >= 2) {
+    const early = snapshots.find(s => s.subTick >= 20);
+    const late  = snapshots.find(s => s.subTick <= 7);
+    if (early && late && early.totalAmt > 0 && late.totalAmt > 0) {
+      const earlyTaiPct = early.taiAmt / early.totalAmt * 100;
+      const lateTaiPct  = late.taiAmt  / late.totalAmt  * 100;
+      const trend = lateTaiPct - earlyTaiPct; // dương = TAI đang tăng, âm = TAI đang giảm
+
+      if (Math.abs(trend) >= 3) {
+        if (trend > 0) {
+          // TAI đang tăng → theo TAI (không contrarian)
+          scoreTai += Math.min(trend * 0.8, 10);
+          reasons.push(`trend:TAI↑${trend.toFixed(1)}%`);
+        } else {
+          // TAI đang giảm → theo XIU (tăng cường contrarian)
+          scoreXiu += Math.min(Math.abs(trend) * 0.8, 10);
+          reasons.push(`trend:XIU↑${Math.abs(trend).toFixed(1)}%`);
+        }
+      }
+    }
+  }
+
   // 4. Streak — chỉ đảo chiều khi có bằng chứng dòng tiền đang yếu dần
   // Không bẻ cầu bệt mù quáng: kiểm tra momentum trong phiên hiện tại
   if (streak.count >= 3) {
