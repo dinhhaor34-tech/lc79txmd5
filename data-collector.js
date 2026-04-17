@@ -74,6 +74,16 @@ function recordPrediction(sessionId, predicted, taiPct, xiuPct, confidence) {
   currentSession.confidenceAtLock = confidence;
 }
 
+// Lưu dự đoán tự động của thuật toán (không cần người dùng chốt tay)
+function recordAlgoPrediction(sessionId, pick, confidence, taiPct, xiuPct, reasons) {
+  if (!currentSession || currentSession.id !== sessionId) return;
+  currentSession.algoPick = pick;
+  currentSession.algoConfidence = confidence;
+  currentSession.algoTaiPct = taiPct;
+  currentSession.algoXiuPct = xiuPct;
+  currentSession.algoReasons = reasons;
+}
+
 function getPredictions() { return predictions; }
 
 function saveSession() {
@@ -102,6 +112,22 @@ function saveSession() {
     }
   }
 
+  // Lưu snapshots tick quan trọng để phân tích sau (không lưu hết để tránh quá nặng)
+  // Lấy các tick ở subTick: 25, 20, 15, 10, 5 trong BETTING
+  const keySubTicks = [25, 20, 15, 10, 5];
+  const tickSnapshots = keySubTicks.map(st => {
+    const snap = bettingTicks.find(t => t.subTick <= st && t.subTick >= st - 2);
+    if (!snap) return null;
+    return {
+      subTick: snap.subTick,
+      taiAmt: snap.taiAmt,
+      xiuAmt: snap.xiuAmt,
+      totalAmt: snap.totalAmt,
+      taiPct: snap.totalAmt > 0 ? +(snap.taiAmt / snap.totalAmt * 100).toFixed(2) : 50,
+      xiuPct: snap.totalAmt > 0 ? +(snap.xiuAmt / snap.totalAmt * 100).toFixed(2) : 50,
+    };
+  }).filter(Boolean);
+
   const record = {
     id: currentSession.id,
     md5: currentSession.md5,
@@ -116,6 +142,17 @@ function saveSession() {
     velTai: velTai !== null ? +velTai.toFixed(2) : null,
     velXiu: velXiu !== null ? +velXiu.toFixed(2) : null,
     tickCount: ticks.length,
+    tickSnapshots, // snapshots tại subTick 25,20,15,10,5
+    // Dự đoán của người dùng (nếu có)
+    predicted: currentSession.predicted || null,
+    taiPctAtLock: currentSession.taiPctAtLock || null,
+    xiuPctAtLock: currentSession.xiuPctAtLock || null,
+    confidenceAtLock: currentSession.confidenceAtLock || null,
+    // Dự đoán tự động của thuật toán tại tick khóa
+    algoPick: currentSession.algoPick || null,
+    algoConfidence: currentSession.algoConfidence || null,
+    algoTaiPct: currentSession.algoTaiPct || null,
+    algoXiuPct: currentSession.algoXiuPct || null,
     time: new Date(currentSession.startTime).toISOString()
   };
 
@@ -200,4 +237,4 @@ function analyze() {
   console.log(`\n=====================================\n`);
 }
 
-module.exports = { startSession, recordTick, recordResult, recordPrediction, getPredictions, analyze };
+module.exports = { startSession, recordTick, recordResult, recordPrediction, recordAlgoPrediction, getPredictions, analyze };

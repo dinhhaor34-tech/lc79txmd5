@@ -120,7 +120,47 @@ app.get("/predict", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// Xem toàn bộ sessions.jsonl dạng JSON
+// Xem accuracy của thuật toán tự động
+app.get("/algo-accuracy", (req, res) => {
+  const fs = require("fs");
+  const DATA_FILE = require("path").join(__dirname, "sessions.jsonl");
+  if (!fs.existsSync(DATA_FILE)) return res.json({ status: "no_data" });
+  const lines = fs.readFileSync(DATA_FILE, "utf8").trim().split("\n").filter(Boolean);
+  const sessions = lines.map(l => JSON.parse(l));
+  const withAlgo = sessions.filter(s => s.algoPick);
+  if (!withAlgo.length) return res.json({ status: "no_algo_data", message: "Chưa có dự đoán thuật toán nào" });
+
+  const correct = withAlgo.filter(s => s.algoPick === s.result).length;
+  const accuracy = (correct / withAlgo.length * 100).toFixed(1);
+
+  // Breakdown theo confidence
+  const highConf = withAlgo.filter(s => s.algoConfidence >= 65);
+  const midConf  = withAlgo.filter(s => s.algoConfidence >= 55 && s.algoConfidence < 65);
+  const lowConf  = withAlgo.filter(s => s.algoConfidence < 55);
+
+  const breakdown = (group) => ({
+    total: group.length,
+    correct: group.filter(s => s.algoPick === s.result).length,
+    accuracy: group.length ? (group.filter(s => s.algoPick === s.result).length / group.length * 100).toFixed(1) + '%' : 'N/A'
+  });
+
+  res.json({
+    status: "ok",
+    total: withAlgo.length,
+    correct,
+    accuracy: accuracy + '%',
+    byConfidence: {
+      high_65plus: breakdown(highConf),
+      mid_55_65:   breakdown(midConf),
+      low_under55: breakdown(lowConf)
+    },
+    recent: withAlgo.slice(-10).reverse().map(s => ({
+      id: s.id, pick: s.algoPick, result: s.result,
+      correct: s.algoPick === s.result, confidence: s.algoConfidence,
+      reasons: s.algoReasons
+    }))
+  });
+});
 app.get("/sessions", (req, res) => {
   const fs = require("fs");
   const DATA_FILE = require("path").join(__dirname, "sessions.jsonl");
