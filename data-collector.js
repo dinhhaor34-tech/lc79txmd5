@@ -86,6 +86,18 @@ function recordAlgoPrediction(sessionId, pick, confidence, taiPct, xiuPct, reaso
 
 function getPredictions() { return predictions; }
 
+// Lấy snapshots của phiên hiện tại để tính velocity
+function getCurrentSnapshots(sessionId) {
+  if (!currentSession || currentSession.id !== sessionId) return [];
+  const bettingTicks = currentSession.ticks.filter(t => t.state === 'BETTING');
+  return bettingTicks.map(t => ({
+    subTick: t.subTick,
+    taiAmt: t.taiAmt,
+    xiuAmt: t.xiuAmt,
+    totalAmt: t.totalAmt
+  }));
+}
+
 function saveSession() {
   if (!currentSession || !currentSession.result) return;
   if (currentSession.ticks.length < 5) return; // bỏ phiên thiếu data
@@ -233,4 +245,4 @@ function analyze() {
   console.log(`\n=====================================\n`);
 }
 
-module.exports = { startSession, recordTick, recordResult, recordPrediction, recordAlgoPrediction, getPredictions, analyze };
+module.exports = { startSession, recordTick, recordResult, recordPrediction, recordAlgoPrediction, getPredictions, getCurrentSnapshots, analyze };

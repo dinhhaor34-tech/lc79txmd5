@@ -1,5 +1,5 @@
 const WebSocket = require("ws");
-const { calcSignal, resetSnaps, getStreak } = require("./calcSignal");
+const { calcSignal, getStreak } = require("./calcSignal");
 const https = require("https");
 const crypto = require("crypto");
 const collector = require("./data-collector");
@@ -202,7 +202,9 @@ async function connect() {
             const taiPct = totalAmt > 0 ? taiAmt / totalAmt * 100 : 50;
             const xiuPct = 100 - taiPct;
             const streak = getStreak(results.map(r => ({ result: r.result })));
-            const sig = calcSignal(taiPct, xiuPct, payload.subTick, 'BETTING', streak, taiAmt, xiuAmt, results);
+            // Dùng snapshots từ currentSession để tính velocity đồng bộ với data-collector
+            const snapshots = collector.getCurrentSnapshots(payload.id);
+            const sig = calcSignal(taiPct, xiuPct, payload.subTick, 'BETTING', streak, taiAmt, xiuAmt, results, snapshots);
             if (sig.pick) {
               collector.recordAlgoPrediction(payload.id, sig.pick, sig.confidence, taiPct, xiuPct, sig.reasons);
               console.log(`[ALGO] Phiên #${payload.id} | Dự đoán: ${sig.pick} (${sig.confidence}%) | Reasons: ${sig.reasons.join(', ')}`);
@@ -215,7 +217,6 @@ async function connect() {
         pendingSession = { id: payload.id, md5: payload.md5 };
         currentSessionMd5 = payload.md5;
         currentTick = null;
-        resetSnaps(); // reset velocity snapshots cho phiên mới
         collector.startSession(payload.id, payload.md5);
         pushSSE("new-session", { id: payload.id, md5: payload.md5 });
         console.log(`[PHIÊN MỚI] #${payload.id} | MD5: ${payload.md5}`);

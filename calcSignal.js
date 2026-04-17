@@ -4,26 +4,20 @@
  */
 
 const LOCK_TICK = 10;
-let tickSnapshots = [];
 
-function recordSnap(tick, taiAmt, xiuAmt) {
-  tickSnapshots.push({ tick, taiAmt, xiuAmt });
-  if (tickSnapshots.length > 20) tickSnapshots.shift();
-}
-
-function resetSnaps() {
-  tickSnapshots = [];
-}
-
-function getVelocity() {
-  if (tickSnapshots.length < 3) return null;
-  const recent = tickSnapshots.slice(-5);
-  const oldest = recent[0], newest = recent[recent.length - 1];
-  const dTai = newest.taiAmt - oldest.taiAmt;
-  const dXiu = newest.xiuAmt - oldest.xiuAmt;
-  const total = dTai + dXiu;
-  if (total <= 0) return null;
-  return { taiVel: dTai / total * 100, xiuVel: dXiu / total * 100 };
+// Tính velocity theo cùng logic với data-collector (snap20 vs snap5)
+// snapshots là mảng { subTick, taiAmt, xiuAmt, totalAmt }
+function getVelocityFromSnapshots(snapshots) {
+  if (!snapshots || snapshots.length < 2) return null;
+  const snap20 = snapshots.find(s => s.subTick <= 20 && s.subTick >= 18);
+  const snap5  = snapshots.find(s => s.subTick <= 5);
+  if (!snap20 || !snap5) return null;
+  const delta = snap5.totalAmt - snap20.totalAmt;
+  if (delta <= 0) return null;
+  return {
+    taiVel: (snap5.taiAmt - snap20.taiAmt) / delta * 100,
+    xiuVel: (snap5.xiuAmt - snap20.xiuAmt) / delta * 100
+  };
 }
 
 function getHistStats(history) {
@@ -48,14 +42,13 @@ function getStreak(history) {
   return { count, type: last };
 }
 
-function calcSignal(taiPct, xiuPct, tick, state, streak, taiAmt, xiuAmt, history) {
+function calcSignal(taiPct, xiuPct, tick, state, streak, taiAmt, xiuAmt, history, snapshots) {
   if (state === 'RESULT') return { confidence: 0, pick: null };
   if (state === 'PREPARE_TO_START') return { confidence: 0, pick: null };
   if (tick > 30) return { confidence: 0, pick: null };
   if (state !== 'BETTING') return { confidence: 0, pick: null };
 
-  recordSnap(tick, taiAmt, xiuAmt);
-  const velocity = getVelocity();
+  const velocity = getVelocityFromSnapshots(snapshots);
   const histStats = getHistStats(history);
   const diff = Math.abs(taiPct - xiuPct);
   let scoreTai = 50, scoreXiu = 50;
@@ -126,4 +119,4 @@ function calcSignal(taiPct, xiuPct, tick, state, streak, taiAmt, xiuAmt, history
   return { pick, confidence: +confidence.toFixed(1), taiConf: +taiConf.toFixed(1), xiuConf: +xiuConf.toFixed(1), reasons };
 }
 
-module.exports = { calcSignal, resetSnaps, getStreak };
+module.exports = { calcSignal, getStreak };
