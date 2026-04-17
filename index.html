@@ -196,28 +196,49 @@
       }
     }
 
-    // 4. Streak (threshold giảm từ 3 → 2 để bắt tín hiệu đảo chiều sớm hơn)
-    if (streak.count >= 2) {
-      // streak 2: bonus nhỏ hơn (tín hiệu yếu hơn streak dài)
-      // streak ≥ 3: dùng công thức count*3, tối đa 15
-      const bonus = streak.count === 2 ? 4 : Math.min(streak.count * 3, 15);
-      if (streak.type === 'TAI') scoreXiu += bonus;
-      else scoreTai += bonus;
-      reasons.push(`🔁 Chuỗi <b>${streak.type==='TAI'?'TÀI':'XỈU'}</b> ${streak.count} phiên → xu hướng đảo`);
+    // 4. Streak — phân tích momentum, không bẻ cầu bệt mù quáng
+    if (streak.count >= 3) {
+      let streakMomentumWeak = false;
+      // Kiểm tra dòng tiền phía streak có đang yếu dần trong phiên không
+      // Dùng tickSnapshots (global) để so sánh đầu phiên vs cuối phiên
+      if (tickSnapshots.length >= 2) {
+        const snaps = tickSnapshots.slice().sort((a, b) => b.tick - a.tick); // sort subTick cao → thấp
+        const early = snaps[snaps.length - 1]; // tick cao nhất = đầu phiên
+        const late  = snaps[0];                // tick thấp nhất = cuối phiên
+        if (early && late && early.taiAmt + early.xiuAmt > 0 && late.taiAmt + late.xiuAmt > 0) {
+          const earlyPct = streak.type === 'TAI'
+            ? early.taiAmt / (early.taiAmt + early.xiuAmt) * 100
+            : early.xiuAmt / (early.taiAmt + early.xiuAmt) * 100;
+          const latePct = streak.type === 'TAI'
+            ? late.taiAmt / (late.taiAmt + late.xiuAmt) * 100
+            : late.xiuAmt / (late.taiAmt + late.xiuAmt) * 100;
+          streakMomentumWeak = latePct < earlyPct - 3;
+        }
+      }
+
+      if (streakMomentumWeak) {
+        // Momentum yếu → có khả năng đảo chiều
+        const bonus = streak.count <= 4 ? 6 : streak.count <= 6 ? 10 : 14;
+        if (streak.type === 'TAI') scoreXiu += bonus;
+        else scoreTai += bonus;
+        reasons.push(`⚠️ Cầu <b>${streak.type==='TAI'?'TÀI':'XỈU'}</b> ${streak.count} phiên nhưng momentum yếu → xu hướng đảo`);
+      } else {
+        // Momentum vẫn mạnh → theo chiều cầu
+        const bonus = streak.count <= 4 ? 4 : streak.count <= 6 ? 6 : 8;
+        if (streak.type === 'TAI') scoreTai += bonus;
+        else scoreXiu += bonus;
+        reasons.push(`🔥 Cầu <b>${streak.type==='TAI'?'TÀI':'XỈU'}</b> ${streak.count} phiên momentum mạnh → theo cầu`);
+      }
     }
 
-    // 5. Balanced money flow: khi dòng tiền cân bằng (45-55%), TAI có xu hướng thắng 71%
-    if (tick <= 20 && taiPct >= 45 && taiPct <= 55 && xiuPct >= 45 && xiuPct <= 55) {
-      scoreTai += 6;
-      reasons.push(`⚖️ Dòng tiền cân bằng (45-55%) → xu hướng TAI`);
-    }
+    // 5. Balanced money flow — đã bỏ (không có bằng chứng đủ mạnh từ data thực tế)
 
-    // 6. Lịch sử
+    // 6. Lịch sử (giảm weight 0.2 → 0.1, lịch sử ngắn không đủ tin cậy)
     if (histStats && histStats.total >= 10) {
       const hDiff = Math.abs(histStats.taiRate - histStats.xiuRate);
-      if (hDiff > 10) {
-        if (histStats.taiRate > histStats.xiuRate) scoreXiu += hDiff * 0.2;
-        else scoreTai += hDiff * 0.2;
+      if (hDiff > 15) { // tăng ngưỡng từ 10 → 15
+        if (histStats.taiRate > histStats.xiuRate) scoreXiu += hDiff * 0.1;
+        else scoreTai += hDiff * 0.1;
         reasons.push(`📊 Lịch sử ${histStats.total} phiên: TÀI ${histStats.taiRate.toFixed(0)}% | XỈU ${histStats.xiuRate.toFixed(0)}%`);
       }
     }
@@ -303,12 +324,13 @@
       if (d.subTick <= LOCK_TICK && d.state === 'BETTING' && !lockedSignal) {
         lockedSignal = calcSignal(taiPct, xiuPct, d.subTick, d.state, streak, data.totalAmountPerType.TAI, data.totalAmountPerType.XIU);
         lockedSessionId = d.id;
-        // Gửi prediction lên server để lưu
         if (lockedSignal.pick) {
           fetch(`/predict?sessionId=${d.id}&predicted=${lockedSignal.pick}&taiPct=${taiPct.toFixed(2)}&xiuPct=${xiuPct.toFixed(2)}&confidence=${lockedSignal.confidence.toFixed(1)}`);
-          // Thêm vào local history ngay
-          predHistory.unshift({ id: d.id, predicted: lockedSignal.pick, confidence: lockedSignal.confidence, taiPct, xiuPct, result: null, correct: null, dices: null });
-          renderPredHistory();
+          // Thêm vào local history ngay (chỉ nếu chưa có từ /sessions)
+          if (!predHistory.find(p => p.id === d.id)) {
+            predHistory.unshift({ id: d.id, predicted: lockedSignal.pick, confidence: lockedSignal.confidence, taiPct, xiuPct, result: null, correct: null, dices: null });
+            renderPredHistory();
+          }
         }
         renderSignal(lockedSignal, true);
         return;
@@ -378,10 +400,32 @@
 
   fetch('/live-snapshot').then(r => r.json()).then(d => {
     history = d.history || [];
-    predHistory = d.predictions || [];
     updateHistory();
-    renderPredHistory();
     if (d.tick) updateTick(d.tick);
+  });
+
+  // Load full algo history từ file (persist qua restart)
+  fetch('/algo-accuracy').then(r => r.json()).then(d => {
+    if (d.status === 'ok' && d.recent) {
+      // recent là 10 phiên gần nhất, load full từ /sessions
+      fetch('/sessions').then(r => r.json()).then(s => {
+        if (s.status === 'ok') {
+          predHistory = s.data
+            .filter(p => p.algoPick)
+            .map(p => ({
+              id: p.id,
+              predicted: p.algoPick,
+              confidence: p.algoConfidence,
+              taiPct: p.algoTaiPct,
+              xiuPct: p.algoXiuPct,
+              result: p.result,
+              correct: p.algoPick === p.result,
+              dices: p.dices
+            }));
+          renderPredHistory();
+        }
+      });
+    }
   });
 
   const es = new EventSource('/live');
@@ -398,8 +442,14 @@
     const d = JSON.parse(e.data);
     history.unshift(d);
     updateHistory();
-    // Cập nhật prediction history
-    updatePredictionHistory(d);
+    // Cập nhật prediction history từ algo (không cần người dùng chốt tay)
+    const pred = predHistory.find(p => p.id === +d.sessionId);
+    if (pred) {
+      pred.result = d.result;
+      pred.correct = pred.predicted === d.result;
+      pred.dices = d.dice;
+    }
+    renderPredHistory();
   });
   es.addEventListener('new-session', () => {
     lockedSignal = null;

@@ -86,26 +86,46 @@ function calcSignal(taiPct, xiuPct, tick, state, streak, taiAmt, xiuAmt, history
     }
   }
 
-  // 4. Streak (threshold 2)
-  if (streak.count >= 2) {
-    const bonus = streak.count === 2 ? 4 : Math.min(streak.count * 3, 15);
-    if (streak.type === 'TAI') scoreXiu += bonus;
-    else scoreTai += bonus;
-    reasons.push(`streak:${streak.type}x${streak.count}`);
+  // 4. Streak — chỉ đảo chiều khi có bằng chứng dòng tiền đang yếu dần
+  // Không bẻ cầu bệt mù quáng: kiểm tra momentum trong phiên hiện tại
+  if (streak.count >= 3) {
+    // Tính momentum: dòng tiền phía streak đang tăng hay giảm trong phiên?
+    // Dùng tickSnapshots nếu có, so sánh taiPct đầu phiên (subTick 25) vs cuối (subTick 5)
+    let streakMomentumWeak = false;
+    if (snapshots && snapshots.length >= 2) {
+      const early = snapshots.find(s => s.subTick >= 20);
+      const late  = snapshots.find(s => s.subTick <= 7);
+      if (early && late) {
+        const earlyPct = streak.type === 'TAI' ? early.taiAmt / early.totalAmt * 100 : early.xiuAmt / early.totalAmt * 100;
+        const latePct  = streak.type === 'TAI' ? late.taiAmt / late.totalAmt * 100 : late.xiuAmt / late.totalAmt * 100;
+        // Momentum yếu: phía streak đang mất dần tỷ lệ trong phiên này
+        streakMomentumWeak = latePct < earlyPct - 3; // giảm hơn 3% → dấu hiệu đảo
+      }
+    }
+
+    if (streakMomentumWeak) {
+      // Momentum yếu → có khả năng đảo chiều
+      const bonus = streak.count <= 4 ? 6 : streak.count <= 6 ? 10 : 14;
+      if (streak.type === 'TAI') scoreXiu += bonus;
+      else scoreTai += bonus;
+      reasons.push(`streak:${streak.type}x${streak.count}↓weak`);
+    } else {
+      // Momentum vẫn mạnh → theo chiều cầu, không bẻ
+      const bonus = streak.count <= 4 ? 4 : streak.count <= 6 ? 6 : 8;
+      if (streak.type === 'TAI') scoreTai += bonus;
+      else scoreXiu += bonus;
+      reasons.push(`streak:${streak.type}x${streak.count}↑follow`);
+    }
   }
 
-  // 5. Balanced money flow
-  if (tick <= 20 && taiPct >= 45 && taiPct <= 55 && xiuPct >= 45 && xiuPct <= 55) {
-    scoreTai += 6;
-    reasons.push('balanced');
-  }
+  // 5. Balanced money flow — đã bỏ (không có bằng chứng đủ mạnh)
 
-  // 6. Lịch sử
+  // 6. Lịch sử (giảm weight, tăng ngưỡng)
   if (histStats && histStats.total >= 10) {
     const hDiff = Math.abs(histStats.taiRate - histStats.xiuRate);
-    if (hDiff > 10) {
-      if (histStats.taiRate > histStats.xiuRate) scoreXiu += hDiff * 0.2;
-      else scoreTai += hDiff * 0.2;
+    if (hDiff > 15) {
+      if (histStats.taiRate > histStats.xiuRate) scoreXiu += hDiff * 0.1;
+      else scoreTai += hDiff * 0.1;
       reasons.push(`hist:TAI${histStats.taiRate.toFixed(0)}`);
     }
   }
