@@ -143,16 +143,12 @@ function saveSession() {
     velXiu: velXiu !== null ? +velXiu.toFixed(2) : null,
     tickCount: ticks.length,
     tickSnapshots, // snapshots tại subTick 25,20,15,10,5
-    // Dự đoán của người dùng (nếu có)
-    predicted: currentSession.predicted || null,
-    taiPctAtLock: currentSession.taiPctAtLock || null,
-    xiuPctAtLock: currentSession.xiuPctAtLock || null,
-    confidenceAtLock: currentSession.confidenceAtLock || null,
     // Dự đoán tự động của thuật toán tại tick khóa
     algoPick: currentSession.algoPick || null,
     algoConfidence: currentSession.algoConfidence || null,
     algoTaiPct: currentSession.algoTaiPct || null,
     algoXiuPct: currentSession.algoXiuPct || null,
+    algoReasons: currentSession.algoReasons || null,
     time: new Date(currentSession.startTime).toISOString()
   };
 
